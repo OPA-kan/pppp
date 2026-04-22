@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>東京 地域データマップ</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f1117; font-family: sans-serif; color: #f0f0f0; height: 100vh; display: flex; flex-direction: column; }
+
+  #header {
+    padding: 14px 20px 10px;
+    background: #0f1117;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    z-index: 1000;
+  }
+  #header h1 { font-size: 18px; font-weight: 900; letter-spacing: 2px; white-space: nowrap; }
+
+  .ctrl-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ctrl-label { font-size: 11px; color: #666; white-space: nowrap; }
+
+  .layer-btn {
+    padding: 5px 13px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid #333;
+    background: #1a1a2e;
+    color: #aaa;
+    transition: all .15s;
+  }
+  .layer-btn.active {
+    border-color: #f0c040;
+    background: #f0c040;
+    color: #111;
+  }
+
+  .toggle-btn {
+    padding: 4px 11px;
+    border-radius: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid #333;
+    background: transparent;
+    color: #888;
+    transition: all .15s;
+  }
+  .toggle-btn.active {
+    border-color: #4fc3f7;
+    background: #4fc3f7;
+    color: #111;
+    font-weight: 700;
+  }
+
+  #map { flex: 1; }
+
+  #legend {
+    position: absolute;
+    bottom: 30px;
+    right: 10px;
+    background: rgba(15,17,23,0.92);
+    border: 1px solid #2a2d3e;
+    border-radius: 10px;
+    padding: 12px 16px;
+    z-index: 1000;
+    min-width: 200px;
+    backdrop-filter: blur(6px);
+  }
+  #legend h3 { font-size: 10px; color: #666; letter-spacing: 1px; margin-bottom: 8px; }
+  .leg-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .leg-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .leg-line { width: 22px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+  .leg-text { font-size: 11px; color: #aaa; }
+
+  .leaflet-popup-content-wrapper {
+    background: #1a1d2e !important;
+    border: 1px solid #444 !important;
+    border-radius: 8px !important;
+    color: #f0f0f0 !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+  }
+  .leaflet-popup-tip { background: #1a1d2e !important; }
+  .leaflet-popup-content { margin: 12px 14px !important; }
+  .popup-name { font-size: 14px; font-weight: 700; color: #f0c040; margin-bottom: 6px; }
+  .popup-row { font-size: 12px; color: #ccc; margin-bottom: 3px; }
+  .popup-row span { color: #fff; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🗺 東京 地域データマップ</h1>
+  <div class="ctrl-group">
+    <span class="ctrl-label">レイヤー：</span>
+    <button class="layer-btn active" onclick="setLayer('人口分布')">人口分布</button>
+    <button class="layer-btn" onclick="setLayer('地形標高')">地形・標高</button>
+    <button class="layer-btn" onclick="setLayer('鉄道密度')">鉄道密度</button>
+  </div>
+  <div class="ctrl-group">
+    <button class="toggle-btn active" id="btn-rail" onclick="toggleRail()">🚃 鉄道路線</button>
+    <button class="toggle-btn" id="btn-ic" onclick="toggleIC()">🔺 高速IC</button>
+    <button class="toggle-btn" id="btn-river" onclick="toggleRiver()">🌊 河川</button>
+    <button class="toggle-btn" id="btn-port" onclick="togglePort()">🚢 港湾</button>
+  </div>
+</div>
+
+<div id="map"></div>
+<div id="legend"></div>
+
+<script>
+// ── 地図初期化（OpenStreetMap タイル）──
+const map = L.map('map', {
+  center: [35.68, 139.65],
+  zoom: 11,
+  zoomControl: true,
+}).setView([35.68, 139.65], 11);
+
+// ダークなタイル（CartoDB Dark Matter）
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── データ ──
+const WARDS = [
+  { name:"千代田区", lat:35.694, lng:139.754, pop:67000,  type:"23区", alt:10,  rail:8, merged:"合併なし", terrain:"低地・台地", river:"神田川",
+    bounds:[[35.68,139.74],[35.68,139.77],[35.71,139.77],[35.71,139.74]] },
+  { name:"中央区",   lat:35.671, lng:139.773, pop:178000, type:"23区", alt:3,   rail:7, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.66,139.76],[35.66,139.79],[35.68,139.79],[35.68,139.76]] },
+  { name:"港区",     lat:35.658, lng:139.750, pop:262000, type:"23区", alt:18,  rail:9, merged:"合併なし", terrain:"台地", river:"渋谷川",
+    bounds:[[35.64,139.73],[35.64,139.77],[35.67,139.77],[35.67,139.73]] },
+  { name:"新宿区",   lat:35.693, lng:139.703, pop:346000, type:"23区", alt:38,  rail:9, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.68,139.69],[35.68,139.72],[35.71,139.72],[35.71,139.69]] },
+  { name:"文京区",   lat:35.708, lng:139.752, pop:240000, type:"23区", alt:22,  rail:6, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.70,139.74],[35.70,139.76],[35.72,139.76],[35.72,139.74]] },
+  { name:"台東区",   lat:35.713, lng:139.781, pop:211000, type:"23区", alt:4,   rail:7, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.70,139.77],[35.70,139.79],[35.72,139.79],[35.72,139.77]] },
+  { name:"墨田区",   lat:35.711, lng:139.814, pop:274000, type:"23区", alt:3,   rail:6, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.70,139.80],[35.70,139.83],[35.72,139.83],[35.72,139.80]] },
+  { name:"江東区",   lat:35.672, lng:139.817, pop:530000, type:"23区", alt:1,   rail:7, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.65,139.80],[35.65,139.84],[35.69,139.84],[35.69,139.80]] },
+  { name:"品川区",   lat:35.609, lng:139.729, pop:416000, type:"23区", alt:20,  rail:8, merged:"合併なし", terrain:"台地", river:"目黒川",
+    bounds:[[35.59,139.71],[35.59,139.75],[35.63,139.75],[35.63,139.71]] },
+  { name:"目黒区",   lat:35.642, lng:139.696, pop:283000, type:"23区", alt:42,  rail:7, merged:"合併なし", terrain:"台地", river:"目黒川",
+    bounds:[[35.63,139.68],[35.63,139.71],[35.65,139.71],[35.65,139.68]] },
+  { name:"大田区",   lat:35.561, lng:139.716, pop:741000, type:"23区", alt:10,  rail:8, merged:"合併なし", terrain:"台地", river:"多摩川",
+    bounds:[[35.53,139.69],[35.53,139.74],[35.59,139.74],[35.59,139.69]] },
+  { name:"世田谷区", lat:35.646, lng:139.653, pop:928000, type:"23区", alt:40,  rail:8, merged:"合併なし", terrain:"台地", river:"多摩川",
+    bounds:[[35.62,139.63],[35.62,139.68],[35.67,139.68],[35.67,139.63]] },
+  { name:"渋谷区",   lat:35.664, lng:139.699, pop:240000, type:"23区", alt:28,  rail:9, merged:"合併なし", terrain:"台地", river:"渋谷川",
+    bounds:[[35.65,139.69],[35.65,139.71],[35.68,139.71],[35.68,139.69]] },
+  { name:"中野区",   lat:35.706, lng:139.664, pop:335000, type:"23区", alt:58,  rail:6, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.69,139.65],[35.69,139.68],[35.72,139.68],[35.72,139.65]] },
+  { name:"杉並区",   lat:35.700, lng:139.637, pop:585000, type:"23区", alt:56,  rail:7, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.68,139.62],[35.68,139.65],[35.72,139.65],[35.72,139.62]] },
+  { name:"豊島区",   lat:35.725, lng:139.716, pop:298000, type:"23区", alt:35,  rail:8, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.71,139.70],[35.71,139.73],[35.74,139.73],[35.74,139.70]] },
+  { name:"北区",     lat:35.752, lng:139.734, pop:357000, type:"23区", alt:18,  rail:7, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.74,139.72],[35.74,139.75],[35.76,139.75],[35.76,139.72]] },
+  { name:"荒川区",   lat:35.737, lng:139.783, pop:217000, type:"23区", alt:5,   rail:5, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.72,139.77],[35.72,139.79],[35.75,139.79],[35.75,139.77]] },
+  { name:"板橋区",   lat:35.751, lng:139.709, pop:578000, type:"23区", alt:22,  rail:6, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.73,139.69],[35.73,139.73],[35.77,139.73],[35.77,139.69]] },
+  { name:"練馬区",   lat:35.737, lng:139.651, pop:748000, type:"23区", alt:38,  rail:7, merged:"合併なし", terrain:"台地", river:"神田川",
+    bounds:[[35.71,139.63],[35.71,139.67],[35.76,139.67],[35.76,139.63]] },
+  { name:"足立区",   lat:35.775, lng:139.795, pop:694000, type:"23区", alt:3,   rail:6, merged:"合併なし", terrain:"低地", river:"隅田川",
+    bounds:[[35.76,139.78],[35.76,139.81],[35.79,139.81],[35.79,139.78]] },
+  { name:"葛飾区",   lat:35.744, lng:139.847, pop:460000, type:"23区", alt:2,   rail:5, merged:"合併なし", terrain:"低地", river:"中川",
+    bounds:[[35.72,139.83],[35.72,139.86],[35.76,139.86],[35.76,139.83]] },
+  { name:"江戸川区", lat:35.706, lng:139.868, pop:693000, type:"23区", alt:1,   rail:5, merged:"合併なし", terrain:"低地", river:"江戸川",
+    bounds:[[35.68,139.85],[35.68,139.89],[35.72,139.89],[35.72,139.85]] },
+  { name:"八王子市", lat:35.666, lng:139.338, pop:577000, type:"多摩", alt:200, rail:5, merged:"合併あり", terrain:"山地", river:"多摩川",
+    bounds:[[35.64,139.30],[35.64,139.38],[35.69,139.38],[35.69,139.30]] },
+  { name:"立川市",   lat:35.698, lng:139.414, pop:183000, type:"多摩", alt:60,  rail:7, merged:"合併あり", terrain:"丘陵", river:"多摩川",
+    bounds:[[35.68,139.39],[35.68,139.44],[35.71,139.44],[35.71,139.39]] },
+  { name:"武蔵野市", lat:35.717, lng:139.566, pop:148000, type:"多摩", alt:56,  rail:6, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.70,139.55],[35.70,139.58],[35.73,139.58],[35.73,139.55]] },
+  { name:"三鷹市",   lat:35.684, lng:139.560, pop:194000, type:"多摩", alt:48,  rail:5, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.67,139.54],[35.67,139.58],[35.70,139.58],[35.70,139.54]] },
+  { name:"調布市",   lat:35.651, lng:139.544, pop:237000, type:"多摩", alt:55,  rail:6, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.63,139.52],[35.63,139.57],[35.67,139.57],[35.67,139.52]] },
+  { name:"府中市",   lat:35.669, lng:139.478, pop:263000, type:"多摩", alt:55,  rail:6, merged:"合併あり", terrain:"台地", river:"多摩川",
+    bounds:[[35.65,139.46],[35.65,139.50],[35.69,139.50],[35.69,139.46]] },
+  { name:"町田市",   lat:35.547, lng:139.446, pop:432000, type:"多摩", alt:150, rail:5, merged:"合併あり", terrain:"丘陵", river:"鶴見川",
+    bounds:[[35.52,139.42],[35.52,139.47],[35.57,139.47],[35.57,139.42]] },
+  { name:"小平市",   lat:35.730, lng:139.476, pop:193000, type:"多摩", alt:70,  rail:4, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.71,139.46],[35.71,139.49],[35.75,139.49],[35.75,139.46]] },
+  { name:"青梅市",   lat:35.788, lng:139.249, pop:132000, type:"多摩", alt:230, rail:3, merged:"合併あり", terrain:"山地", river:"多摩川",
+    bounds:[[35.76,139.22],[35.76,139.28],[35.81,139.28],[35.81,139.22]] },
+  { name:"昭島市",   lat:35.705, lng:139.354, pop:113000, type:"多摩", alt:80,  rail:4, merged:"合併あり", terrain:"丘陵", river:"多摩川",
+    bounds:[[35.69,139.33],[35.69,139.38],[35.72,139.38],[35.72,139.33]] },
+  { name:"国分寺市", lat:35.700, lng:139.462, pop:125000, type:"多摩", alt:68,  rail:5, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.68,139.44],[35.68,139.48],[35.72,139.48],[35.72,139.44]] },
+  { name:"東村山市", lat:35.754, lng:139.468, pop:153000, type:"多摩", alt:55,  rail:4, merged:"合併あり", terrain:"台地", river:"神田川",
+    bounds:[[35.74,139.45],[35.74,139.49],[35.77,139.49],[35.77,139.45]] },
+];
+
+const RAIL_LINES = [
+  { name:"JR山手線",     color:"#80c241", weight:3,
+    latlngs:[[35.686,139.766],[35.710,139.740],[35.725,139.716],[35.730,139.700],[35.730,139.680],[35.720,139.664],[35.700,139.650],[35.680,139.657],[35.664,139.699],[35.640,139.729],[35.650,139.740],[35.660,139.760],[35.671,139.773],[35.686,139.766]] },
+  { name:"JR中央線",     color:"#e8a000", weight:2.5,
+    latlngs:[[35.686,139.766],[35.692,139.740],[35.693,139.703],[35.706,139.664],[35.700,139.637],[35.717,139.566],[35.713,139.540],[35.669,139.478],[35.698,139.414],[35.666,139.338],[35.788,139.249]] },
+  { name:"JR総武線",     color:"#f5c000", weight:2,
+    latlngs:[[35.686,139.766],[35.700,139.800],[35.706,139.830],[35.744,139.847],[35.706,139.868]] },
+  { name:"東急田園都市線",color:"#009944", weight:2,
+    latlngs:[[35.664,139.699],[35.646,139.663],[35.620,139.620],[35.600,139.540],[35.570,139.490]] },
+  { name:"京王線",       color:"#e0004f", weight:2,
+    latlngs:[[35.664,139.699],[35.646,139.653],[35.651,139.600],[35.651,139.544],[35.669,139.478],[35.660,139.400],[35.666,139.338]] },
+  { name:"小田急線",     color:"#0052a4", weight:2,
+    latlngs:[[35.672,139.700],[35.646,139.653],[35.620,139.580],[35.590,139.520],[35.547,139.446]] },
+  { name:"西武池袋線",   color:"#f5a200", weight:2,
+    latlngs:[[35.725,139.716],[35.730,139.680],[35.737,139.651],[35.740,139.600],[35.745,139.560]] },
+  { name:"東武線",       color:"#f76300", weight:2,
+    latlngs:[[35.711,139.814],[35.740,139.820],[35.770,139.820],[35.800,139.810]] },
+];
+
+const RIVERS = [
+  { name:"多摩川", color:"#2196f3", weight:3,
+    latlngs:[[35.8,139.2],[35.7,139.4],[35.6,139.6],[35.5,139.7],[35.4,139.8]] },
+  { name:"隅田川", color:"#2196f3", weight:2.5,
+    latlngs:[[35.75,139.8],[35.72,139.78],[35.71,139.81],[35.67,139.82],[35.65,139.85]] },
+  { name:"神田川", color:"#2196f3", weight:2,
+    latlngs:[[35.75,139.7],[35.72,139.72],[35.70,139.74],[35.68,139.76],[35.66,139.78]] },
+  { name:"江戸川", color:"#2196f3", weight:2,
+    latlngs:[[35.75,139.9],[35.72,139.88],[35.70,139.87],[35.68,139.86],[35.66,139.85]] },
+];
+
+const PORTS = [
+  { name:"東京港", lat:35.62, lng:139.78, type:"主要港", role:"外との玄関口・物流" },
+  { name:"横浜港", lat:35.45, lng:139.65, type:"国際港", role:"外との玄関口・物流" },
+];
+
+const ICS = [
+  { name:"調布IC",    lat:35.658, lng:139.526, road:"中央道", commercial:4, danchi:3, logistics:1 },
+  { name:"東京IC",    lat:35.570, lng:139.716, road:"東名",   commercial:5, danchi:2, logistics:2 },
+  { name:"八王子IC",  lat:35.640, lng:139.320, road:"中央道", commercial:6, danchi:4, logistics:3 },
+  { name:"青梅IC",    lat:35.800, lng:139.220, road:"圏央道", commercial:2, danchi:1, logistics:5 },
+  { name:"葛西IC",    lat:35.678, lng:139.872, road:"湾岸線", commercial:5, danchi:3, logistics:5 },
+  { name:"あきる野IC",lat:35.730, lng:139.290, road:"圏央道", commercial:2, danchi:2, logistics:6 },
+];
+
+// ── レイヤー管理 ──
+let currentLayer = "人口分布";
+let circleLayer = L.layerGroup().addTo(map);
+let polygonLayer = L.layerGroup();
+let railLayer   = L.layerGroup().addTo(map);
+let riverLayer  = L.layerGroup();
+let portLayer   = L.layerGroup();
+let icLayer     = L.layerGroup();
+let showRail = true, showIC = false, showRiver = false, showPort = false;
+
+function altColor(alt) {
+  if (alt >= 200) return "#5d4037";
+  if (alt >= 80)  return "#8d6e63";
+  if (alt >= 40)  return "#bcaaa4";
+  if (alt >= 10)  return "#81c784";
+  return "#1565c0";
+}
+function railColor(rail) {
+  if (rail >= 9) return "#f44336";
+  if (rail >= 7) return "#ff9800";
+  if (rail >= 5) return "#4caf50";
+  return "#78909c";
+}
+
+function drawCircles() {
+  circleLayer.clearLayers();
+  polygonLayer.clearLayers();
+  WARDS.forEach(d => {
+    let color, radius;
+    if (currentLayer === "人口分布") {
+      color  = d.type === "23区" ? "#e53935" : "#1e88e5";
+      radius = Math.sqrt(d.pop / 928000) * 1800;
+      const circle = L.circle([d.lat, d.lng], {
+        radius,
+        color:       "rgba(255,255,255,0.3)",
+        weight:      1,
+        fillColor:   color,
+        fillOpacity: 0.72,
+      });
+      circle.bindPopup(`
+        <div class="popup-name">${d.name}</div>
+        <div class="popup-row">人口：<span>${d.pop.toLocaleString()}人</span></div>
+        <div class="popup-row">標高：<span>約${d.alt}m</span></div>
+        <div class="popup-row">鉄道スコア：<span>${d.rail}/10</span></div>
+        <div class="popup-row">エリア：<span>${d.type}</span></div>
+        <div class="popup-row">合併：<span>${d.merged}</span></div>
+        <div class="popup-row">地形：<span>${d.terrain}</span></div>
+        <div class="popup-row">主な河川：<span>${d.river}</span></div>
+      `, { maxWidth: 250 });
+      circleLayer.addLayer(circle);
+    } else if (currentLayer === "地形標高") {
+      color = altColor(d.alt);
+      const polygon = L.polygon(d.bounds, {
+        color:       "rgba(255,255,255,0.5)",
+        weight:      1,
+        fillColor:   color,
+        fillOpacity: 0.8,
+      });
+      polygon.bindPopup(`
+        <div class="popup-name">${d.name}</div>
+        <div class="popup-row">標高：<span>約${d.alt}m</span></div>
+        <div class="popup-row">地形：<span>${d.terrain}</span></div>
+        <div class="popup-row">主な河川：<span>${d.river}</span></div>
+        <div class="popup-row">人口：<span>${d.pop.toLocaleString()}人</span></div>
+        <div class="popup-row">エリア：<span>${d.type}</span></div>
+      `, { maxWidth: 250 });
+      polygonLayer.addLayer(polygon);
+    } else {
+      color  = railColor(d.rail);
+      radius = d.rail * 120;
+      const circle = L.circle([d.lat, d.lng], {
+        radius,
+        color:       "rgba(255,255,255,0.3)",
+        weight:      1,
+        fillColor:   color,
+        fillOpacity: 0.72,
+      });
+      circle.bindPopup(`
+        <div class="popup-name">${d.name}</div>
+        <div class="popup-row">人口：<span>${d.pop.toLocaleString()}人</span></div>
+        <div class="popup-row">標高：<span>約${d.alt}m</span></div>
+        <div class="popup-row">鉄道スコア：<span>${d.rail}/10</span></div>
+        <div class="popup-row">エリア：<span>${d.type}</span></div>
+        <div class="popup-row">合併：<span>${d.merged}</span></div>
+        <div class="popup-row">地形：<span>${d.terrain}</span></div>
+        <div class="popup-row">主な河川：<span>${d.river}</span></div>
+      `, { maxWidth: 250 });
+      circleLayer.addLayer(circle);
+    }
+  });
+  if (currentLayer === "地形標高") {
+    map.addLayer(polygonLayer);
+  } else {
+    map.removeLayer(polygonLayer);
+  }
+}
+
+function drawRail() {
+  railLayer.clearLayers();
+  RAIL_LINES.forEach(line => {
+    const pl = L.polyline(line.latlngs, {
+      color:  line.color,
+      weight: line.weight,
+      opacity: 0.8,
+      smoothFactor: 1,
+    });
+    pl.bindTooltip(line.name, { sticky: true, className: 'leaflet-tooltip' });
+    railLayer.addLayer(pl);
+  });
+}
+
+function drawRiver() {
+  riverLayer.clearLayers();
+  RIVERS.forEach(river => {
+    const pl = L.polyline(river.latlngs, {
+      color:  river.color,
+      weight: river.weight,
+      opacity: 0.7,
+      smoothFactor: 1,
+    });
+    pl.bindTooltip(river.name, { sticky: true, className: 'leaflet-tooltip' });
+    riverLayer.addLayer(pl);
+  });
+}
+
+function drawPort() {
+  portLayer.clearLayers();
+  PORTS.forEach(port => {
+    const icon = L.divIcon({
+      html: `<div style="font-size:20px;">🚢</div>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+      className: '',
+    });
+    const marker = L.marker([port.lat, port.lng], { icon });
+    marker.bindPopup(`
+      <div class="popup-name">🚢 ${port.name}</div>
+      <div class="popup-row">種類：<span>${port.type}</span></div>
+      <div class="popup-row">役割：<span>${port.role}</span></div>
+    `, { maxWidth: 180 });
+    portLayer.addLayer(marker);
+  });
+}
+
+function drawIC() {
+  icLayer.clearLayers();
+  ICS.forEach(ic => {
+    const total = ic.commercial + ic.danchi + ic.logistics;
+    const size  = 8 + total * 0.8;
+    const icon  = L.divIcon({
+      html: `<div style="
+        width:0;height:0;
+        border-left:${size}px solid transparent;
+        border-right:${size}px solid transparent;
+        border-bottom:${size*1.7}px solid #f0c040;
+        filter: drop-shadow(0 0 4px #f0c040aa);
+      "></div>`,
+      iconSize: [size*2, size*1.7],
+      iconAnchor: [size, size*1.7],
+      className: '',
+    });
+    const marker = L.marker([ic.lat, ic.lng], { icon });
+    marker.bindPopup(`
+      <div class="popup-name">🔺 ${ic.name}</div>
+      <div class="popup-row">路線：<span>${ic.road}</span></div>
+      <div class="popup-row">商業施設：<span>${ic.commercial}件</span></div>
+      <div class="popup-row">団地・住宅：<span>${ic.danchi}件</span></div>
+      <div class="popup-row">物流・工場：<span>${ic.logistics}件</span></div>
+    `, { maxWidth: 180 });
+    icLayer.addLayer(marker);
+  });
+}
+
+function setLayer(name) {
+  currentLayer = name;
+  document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  drawCircles();
+  updateLegend();
+}
+
+function toggleRail() {
+  showRail = !showRail;
+  document.getElementById('btn-rail').classList.toggle('active', showRail);
+  if (showRail) map.addLayer(railLayer); else map.removeLayer(railLayer);
+}
+
+function toggleIC() {
+  showIC = !showIC;
+  document.getElementById('btn-ic').classList.toggle('active', showIC);
+  if (showIC) { icLayer.addTo(map); } else { map.removeLayer(icLayer); }
+}
+
+function toggleRiver() {
+  showRiver = !showRiver;
+  document.getElementById('btn-river').classList.toggle('active', showRiver);
+  if (showRiver) { riverLayer.addTo(map); } else { map.removeLayer(riverLayer); }
+}
+
+function togglePort() {
+  showPort = !showPort;
+  document.getElementById('btn-port').classList.toggle('active', showPort);
+  if (showPort) { portLayer.addTo(map); } else { map.removeLayer(portLayer); }
+}
+
+function updateLegend() {
+  const el = document.getElementById('legend');
+  let html = '<h3>LEGEND</h3>';
+  if (currentLayer === "人口分布") {
+    html += `
+      <div class="leg-item"><div class="leg-dot" style="background:#e53935"></div><span class="leg-text">23区（円の大きさ＝人口）</span></div>
+      <div class="leg-item"><div class="leg-dot" style="background:#1e88e5"></div><span class="leg-text">多摩地区</span></div>
+    `;
+  } else if (currentLayer === "地形標高") {
+    html += `
+      <div class="leg-item"><div class="leg-dot" style="background:#5d4037"></div><span class="leg-text">200m+ 山地</span></div>
+      <div class="leg-item"><div class="leg-dot" style="background:#8d6e63"></div><span class="leg-text">80-200m 丘陵</span></div>
+      <div class="leg-item"><div class="leg-dot" style="background:#bcaaa4"></div><span class="leg-text">40-80m 台地</span></div>
+      <div class="leg-item"><div class="leg-dot" style="background:#81c784"></div><span class="leg-text">10-40m 緑地</span></div>
+      <div class="leg-item"><div class="leg-dot" style="background:#1565c0"></div><span class="leg-text">〜10m 低地</span></div>
+      <div class="leg-text" style="margin-top:8px;font-size:10px;color:#888;">※ 各区の境界をポリゴンで表示</div>
+    `;
+  } else {
+    [["主要ターミナル(9+)","#f44336"],["中核駅(7-8)","#ff9800"],["地域駅(5-6)","#4caf50"],["少ない(〜4)","#78909c"]].forEach(([l,c]) => {
+      html += `<div class="leg-item"><div class="leg-dot" style="background:${c}"></div><span class="leg-text">${l}</span></div>`;
+    });
+  }
+  html += '<div style="margin-top:8px;border-top:1px solid #333;padding-top:8px">';
+  RAIL_LINES.forEach(l => {
+    html += `<div class="leg-item"><div class="leg-line" style="background:${l.color}"></div><span class="leg-text" style="font-size:10px">${l.name}</span></div>`;
+  });
+  html += '</div>';
+  html += '<div style="margin-top:8px;border-top:1px solid #333;padding-top:8px">';
+  RIVERS.forEach(r => {
+    html += `<div class="leg-item"><div class="leg-line" style="background:${r.color}"></div><span class="leg-text" style="font-size:10px">${r.name}</span></div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// 初期描画
+drawCircles();
+drawRail();
+drawRiver();
+drawPort();
+drawIC();
+updateLegend();
+</script>
+</body>
+</html>
